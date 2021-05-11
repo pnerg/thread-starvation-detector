@@ -18,12 +18,27 @@ package org.dmonix.tsd
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.FiniteDuration
 
-private[tsd] class MonitoredExecutionContext(val name:String, val monitorConfig: MonitorConfig, val executionContext: ExecutionContext, val reporters:Seq[Reporter]) extends MonitoredThreadPool {
+/**
+ * Represents a single [[ExecutionContext]] that is being monitored.
+ * @param name The name provided to the execution context
+ * @param executionContext The execution context to monitor
+ * @param maxExecutionTimeThreshold The max threshold allowed to
+ */
+private[tsd] class MonitoredExecutionContext(val name:String, val executionContext:ExecutionContext, val maxExecutionTimeThreshold:FiniteDuration, warningSilenceDuration:FiniteDuration) extends MonitoredThreadPool {
+  /** The EPOCH time since we last sent a failure notification. Not last failure but when it was notified last time. */
+  @volatile private var lastFailureNotificationTime = 0L
+
   /** The state of this monitor.*/
   @volatile private var running = false
+  /** How many tests this monitor has executed. */
+  private var testCounter = 0
   /** How many times this monitor has failed the test. */
   private var failureCounter = 0
+  /** How many consecutive failures this monitor has, reset on success */
+  private var consecutiveFailureCounter = 0
 
+  override def testCount: Int = testCounter
+  override def consecutiveFailureCount: Int = consecutiveFailureCounter
   override def failureCount = failureCounter
 
   /** Mark the monitor as under test. */
@@ -33,19 +48,32 @@ private[tsd] class MonitoredExecutionContext(val name:String, val monitorConfig:
    * @param duration
    * @return If a notification should be sent or not due to exceeded queue time
    */
-  private[tsd] def finishTest(duration:FiniteDuration):Unit = {
+  private[tsd] def finishTest(duration:FiniteDuration):(Boolean, Boolean, Report) = {
     running = false
+    testCounter = testCounter + 1
     //the reported duration exceeds the configured max time
-    if(duration > monitorConfig.maxExecutionTimeThreshold) {
+    if(duration > maxExecutionTimeThreshold) {
       failureCounter = failureCounter + 1
-      reporters.foreach(_.reportFailed(name, duration))
+      consecutiveFailureCounter = consecutiveFailureCounter + 1
+      //are we allowed to log the event, i.e. was the last error within the silence period?
+      val now = System.currentTimeMillis()
+      //decide if we're allowed to log this failure
+      val log = if(now-lastFailureNotificationTime > warningSilenceDuration.toMillis) {
+        lastFailureNotificationTime = now
+        true
+      } else false
+
+      (false, log, Report(name, duration, testCounter, failureCounter, consecutiveFailureCounter))
     }
     // successful test
     else {
-      reporters.foreach(_.reportSuccessful(name, duration))
+      consecutiveFailureCounter = 0
+      (true, false, Report(name, duration, testCounter, failureCounter, consecutiveFailureCounter))
     }
   }
+
   /** If the monitor currently is under test */
   private[tsd] def isRunning:Boolean = running
+
 }
 

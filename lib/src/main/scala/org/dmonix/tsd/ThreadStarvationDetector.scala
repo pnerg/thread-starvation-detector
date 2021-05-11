@@ -15,12 +15,12 @@
  */
 package org.dmonix.tsd
 
-import com.typesafe.config.{Config, ConfigValue}
+import com.typesafe.config.Config
 import org.slf4j.LoggerFactory
 
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
-import scala.concurrent.duration.{Duration, FiniteDuration}
+import scala.concurrent.duration.Duration
 import scala.util.Try
 
 /**
@@ -60,11 +60,15 @@ trait MonitoredThreadPool {
    */
   def isCancelled:Boolean = cancelled
 
-  /**
-   * The total amount of times this execution context has failed its monitoring criteria
-   * @return
-   */
+  /** How many tests this monitor has executed. */
+  def testCount:Int
+
+  /** How many times this monitor has failed the test. */
   def failureCount:Int
+
+  /** How many consecutive failures this monitor has, reset on success */
+  def consecutiveFailureCount:Int
+
 }
 
 /**
@@ -74,24 +78,6 @@ trait MonitoredThreadPool {
 object ThreadStarvationDetector {
   private val logger = LoggerFactory.getLogger(classOf[ThreadStarvationDetector])
   private[tsd] type WarningConsumer = String => Unit
-
-  private implicit class PimpedConfig(config: Config) {
-    def getFiniteDuration(path: String): FiniteDuration = Duration.fromNanos(config.getDuration(path).toNanos)
-
-    def getFiniteDurationOpt(path: String): Option[FiniteDuration] = {
-      if (config.hasPath(path))
-        Option(getFiniteDuration(path))
-      else
-        None
-    }
-
-    def getBooleanOpt(path: String): Option[Boolean] = {
-      if (config.hasPath(path))
-        Option(config.getBoolean(path))
-      else
-        None
-    }
-  }
 
   /**
    * Creates the detector instance.
@@ -109,18 +95,23 @@ object ThreadStarvationDetector {
 
   private[tsd] def createReporters(config: Config):Seq[Reporter] = {
     import scala.collection.convert.ImplicitConversions.`collection AsScalaIterable`
-    config.getConfig("thread-starvation-detector.reporter").root().keySet().map(name => createReporter(name, config.getConfig(s"thread-starvation-detector.reporter.$name"), config)).flatten.toSeq
+    config.getConfig("thread-starvation-detector.reporter")
+      .root()
+      .keySet()
+      .map(name => createReporter(name, config))
+      .flatten.toSeq
   }
 
-  private[tsd] def createReporter(name:String, config: Config, fullConfig:Config):Option[Reporter] = {
+  private[tsd] def createReporter(name:String, config:Config):Option[Reporter] = {
+    val localCfg = config.getConfig(s"thread-starvation-detector.reporter.$name")
     try {
       val reporterConfig = ReporterConfig(name,
-        config.getString("description"),
-        config.getBoolean("enabled"),
-        fullConfig
+        localCfg.getString("description"),
+        localCfg.getBoolean("enabled"),
+        config
       )
       if (reporterConfig.enabled) {
-        val factory = Class.forName(config.getString("factory")).getDeclaredConstructor().newInstance().asInstanceOf[ReporterFactory]
+        val factory = Class.forName(localCfg.getString("factory")).getDeclaredConstructor().newInstance().asInstanceOf[ReporterFactory]
         Option(factory.newReporter(reporterConfig))
       } else {
         None
@@ -133,40 +124,7 @@ object ThreadStarvationDetector {
 
   }
 
-  /**
-   * Parses the config to case class representations
-   *
-   * @param config
-   * @return
-   */
-  private[tsd] def parseConfig(config: Config): ThreadStarvationDetectorConfig = {
-    import scala.collection.JavaConverters._
 
-    val detectorConfig = config.getConfig("thread-starvation-detector")
-    val defaultMonitorCfg = MonitorConfig(
-      maxExecutionTimeThreshold = detectorConfig.getFiniteDuration("max-execution-time-threshold"),
-      warningSilenceDuration = detectorConfig.getFiniteDuration("warning-silence-duration"),
-      loggingEnabled = detectorConfig.getBoolean("logging-enabled")
-    )
-
-    //read the thread-starvation-detector.custom config section and pick any custom values
-    val customMonitorConfig = detectorConfig.getObject("custom").keySet().asScala.map { name =>
-      val customConfig = detectorConfig.getConfig("custom." + name)
-      val cfg = MonitorConfig(
-        maxExecutionTimeThreshold = customConfig.getFiniteDurationOpt("max-execution-time-threshold") getOrElse defaultMonitorCfg.maxExecutionTimeThreshold,
-        warningSilenceDuration = customConfig.getFiniteDurationOpt("warning-silence-duration") getOrElse defaultMonitorCfg.warningSilenceDuration,
-        loggingEnabled = customConfig.getBooleanOpt("logging-enabled") getOrElse defaultMonitorCfg.loggingEnabled
-      )
-      (name, cfg)
-    }.toMap
-
-    ThreadStarvationDetectorConfig(
-      initialDelay = detectorConfig.getFiniteDuration("initial-delay"),
-      checkInterval = detectorConfig.getFiniteDuration("check-interval"),
-      defaultMonitorConfig = defaultMonitorCfg,
-      customMonitorConfig = customMonitorConfig
-    )
-  }
 }
 
 /**
@@ -194,7 +152,7 @@ private[tsd] class ThreadStarvationDetectorImpl(config: ThreadStarvationDetector
       case None =>
         logger.info(s"Added execution context named [$name] to be monitored")
         val monitorConfig = config.getCustomOrDefaultMonitorConfig(name)
-        val me = new MonitoredExecutionContext(name, monitorConfig, ec, reporters)
+        val me = new MonitoredExecutionContext(name, ec, monitorConfig.maxExecutionTimeThreshold, monitorConfig.warningSilenceDuration)
         queue += me
         me
     }
@@ -240,7 +198,17 @@ private[tsd] class ThreadStarvationDetectorImpl(config: ThreadStarvationDetector
      * Once this test job gets to execute we just stop the timer.
      * It's the queue time that indicates how busy the executor is.
      */
-    override def run(): Unit = mo.finishTest(Duration.fromNanos(System.nanoTime - startTime))
+    override def run(): Unit = {
+      val (success, log, report) = mo.finishTest(Duration.fromNanos(System.nanoTime - startTime))
+      if(success) {
+        logger.debug(s"Successfully executed a test job in [${report.name}] with a duration of [${report.duration.toMillis}]ms")
+        reporters.foreach(_.reportSuccessful(report))
+      } else {
+        if(log)
+          logger.error(s"Executing a test job in [${report.name}] took [${report.duration.toMillis}]ms, max configured threshold is [${mo.maxExecutionTimeThreshold.toMillis}]ms, the pool has [${report.successiveFailureCount}] consecutive failures and total failure count of [${report.totalFailureCount}]. Possible cause is CPU and/or thread starvation")
+        reporters.foreach(_.reportFailed(report))
+      }
+    }
   }
 }
 
@@ -251,7 +219,9 @@ private[tsd] class ThreadStarvationDetectorImpl(config: ThreadStarvationDetector
 private[tsd] class NoOpThreadStarvationDetector extends ThreadStarvationDetector {
   private object NoOpMonitoredThreadPool extends MonitoredThreadPool {
     cancel()
+    override def testCount: Int = 0
     override def failureCount: Int = 0
+    override def consecutiveFailureCount: Int = 0
   }
   override def monitorExecutionContext(name:String, ec: ExecutionContext): MonitoredThreadPool = NoOpMonitoredThreadPool
   override def stop(): Unit = {}

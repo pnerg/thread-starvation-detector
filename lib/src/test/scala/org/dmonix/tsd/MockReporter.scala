@@ -16,9 +16,7 @@
 package org.dmonix.tsd
 
 import java.util.concurrent.{Semaphore, TimeUnit}
-import scala.concurrent.duration.FiniteDuration
 
-case class Report(name: String, duration: FiniteDuration, successful:Boolean)
 class MockReporterFactory extends ReporterFactory {
   override def newReporter(reporterConfig: ReporterConfig): Reporter = MockReporter()
 }
@@ -26,16 +24,16 @@ object MockReporter {
   def apply():MockReporter = new MockReporter()
 }
 class MockReporter extends Reporter {
-  var report:Option[Report] = None
+  var report:Option[(Boolean, Report)] = None
   val semaphore = new Semaphore(0)
 
-  override def reportSuccessful(name: String, duration: FiniteDuration): Unit = reportAndRelease(Report(name, duration, true))
-  override def reportFailed(name: String, duration: FiniteDuration): Unit = reportAndRelease(Report(name, duration, false))
+  override def reportSuccessful(report: Report): Unit = reportAndRelease(true, report)
+  override def reportFailed(report: Report): Unit = reportAndRelease(false, report)
 
   def waitForReport():Boolean = semaphore.tryAcquire(5, TimeUnit.SECONDS)
 
-  private def reportAndRelease(r:Report):Unit = {
-    report = Some(r)
+  private def reportAndRelease(result:Boolean, r:Report):Unit = {
+    report = Some((result, r))
     semaphore.release()
   }
   override def stop(): Unit = {}

@@ -26,42 +26,27 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 class ThreadStarvationDetectorSpec extends Specification with TestUtils {
   "Create instance of reporter shall" >> {
     import ThreadStarvationDetector.createReporter
-    "return the default logger reporter for the default config" >> {
-      val localConfig = config.getConfig("thread-starvation-detector.reporter.logging-reporter")
-      createReporter("logger-reporter", localConfig, config) must beSome
-    }
     "return the configured custom reporter" >> {
-      val localConfig = mockReporterConfig(true).getConfig("thread-starvation-detector.reporter.mock-reporter")
-      createReporter("mock-reporter", localConfig, config) must beSome
+      val localConfig = mockReporterConfig(true).withFallback(config)
+      createReporter("mock-reporter", localConfig) must beSome
     }
     "return None if the custom reporter is disabled" >> {
-      val localConfig = mockReporterConfig(false).getConfig("thread-starvation-detector.reporter.mock-reporter")
-      createReporter("mock-reporter", localConfig, config) must beNone
-    }
-    "return None for the default config if the logger reporter is disabled" >> {
-      val localConfig = config("thread-starvation-detector.reporter.logging-reporter.enabled=false").getConfig("thread-starvation-detector.reporter.logging-reporter")
-      createReporter("logger-reporter", localConfig, config) must beNone
+      val localConfig = mockReporterConfig(false).withFallback(config)
+      createReporter("mock-reporter", localConfig) must beNone
     }
   }
   "Creating list of reporters shall" >> {
     import ThreadStarvationDetector.createReporters
-    "return the default logger reporter for the default config" >> {
-      createReporters(config) must have size(1)
+    "yield a empty list if there are no configured reporters" >> {
+      createReporters(config) must beEmpty
     }
-    "return the default logger reporter and added custom/mock logger" >> {
+    "return the added custom/mock logger" >> {
       val localConfig = mockReporterConfig(true).withFallback(config)
-      createReporters(localConfig) must have size(2)
-    }
-    "return only the default logger reporter if the custom/mock logger is disabled" >> {
-      val localConfig = mockReporterConfig(false).withFallback(config)
       createReporters(localConfig) must have size(1)
     }
-    "yield an empty list for the default config if the logger reporter is disabled" >> {
-      val localConfig = config("thread-starvation-detector.reporter.logging-reporter.enabled=false")
+    "return a empty list if the custom/mock logger is disabled" >> {
+      val localConfig = mockReporterConfig(false).withFallback(config)
       createReporters(localConfig) must beEmpty
-    }
-    "yield an empty list if there are no configured reporters" >> {
-      ok
     }
   }
   "Using ThreadStarvationDetector object shall" >> {
@@ -72,39 +57,7 @@ class ThreadStarvationDetectorSpec extends Specification with TestUtils {
     "yield a proper monitor if the feature is enabled" >> {
       ThreadStarvationDetector(config) must haveClass[ThreadStarvationDetectorImpl]
     }
-    "properly parse the default config" >> {
-      val cfg = ThreadStarvationDetector.parseConfig(config)
-      cfg.checkInterval === 1.second
-      cfg.initialDelay === 30.seconds
-      cfg.defaultMonitorConfig.maxExecutionTimeThreshold === 100.millis
-      cfg.defaultMonitorConfig.loggingEnabled === true
-      cfg.defaultMonitorConfig.warningSilenceDuration === 30.seconds
-      cfg.customMonitorConfig must beEmpty
-    }
-    "properly parse a custom config" >> {
-      val overrides =
-        """
-          |thread-starvation-detector {
-          |  enabled = true
-          |  initial-delay = 1s
-          |  max-execution-time-threshold = 200ms
-          |  custom {
-          |    #custom config for one of the execution contexts
-          |    example-context {
-          |      max-execution-time-threshold = 300ms
-          |      logging-enabled = false
-          |    }
-          |  }
-          |}
-          |""".stripMargin
-      val cfg = ThreadStarvationDetector.parseConfig(config(overrides))
-      cfg.checkInterval === 1.second //default value
-      cfg.initialDelay === 1.second //custom value
-      cfg.defaultMonitorConfig.maxExecutionTimeThreshold === 200.millis //custom value
-      cfg.defaultMonitorConfig.loggingEnabled === true //default value
-      cfg.defaultMonitorConfig.warningSilenceDuration === 30.seconds //default value
-      cfg.customMonitorConfig.get("example-context") must beSome(MonitorConfig(300.millis, 30.seconds, false)) //custom value
-    }
+
   }
   "Using ThreadStarvationDetectorImpl shall" >> {
     val monitorConfig = MonitorConfig(50.millis, 10.seconds, true)
