@@ -94,10 +94,12 @@ object ThreadStarvationDetector {
   }
 
   private[tsd] def createReporters(config: Config):Seq[Reporter] = {
-    import scala.collection.convert.ImplicitConversions.`collection AsScalaIterable`
+    import scala.collection.JavaConverters._
+
     config.getConfig("thread-starvation-detector.reporter")
       .root()
       .keySet()
+      .asScala
       .map(name => createReporter(name, config))
       .flatten.toSeq
   }
