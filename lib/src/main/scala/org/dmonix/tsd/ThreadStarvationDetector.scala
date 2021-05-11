@@ -15,18 +15,17 @@
  */
 package org.dmonix.tsd
 
-import com.typesafe.config.Config
+import com.typesafe.config.{Config, ConfigValue}
 import org.slf4j.LoggerFactory
 
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.{Duration, FiniteDuration}
 import scala.util.Try
-import scala.concurrent.duration.DurationInt
 
 /**
  * Allows for monitoring of thread starvation in thread pools
- * @since 3.7.0
+ * @since 1.0
  */
 trait ThreadStarvationDetector {
   /**
@@ -45,7 +44,7 @@ trait ThreadStarvationDetector {
 
 /**
  * Represents a single monitored execution context
- * @since 3.7.0
+ * @since 1.0
  */
 trait MonitoredThreadPool {
   @volatile private var cancelled:Boolean = false
@@ -70,7 +69,7 @@ trait MonitoredThreadPool {
 
 /**
  * Companion object to create [[ThreadStarvationDetector]] instances
- * @since 3.7.0
+ * @since 1.0
  */
 object ThreadStarvationDetector {
   private val logger = LoggerFactory.getLogger(classOf[ThreadStarvationDetector])
@@ -91,7 +90,6 @@ object ThreadStarvationDetector {
         Option(config.getBoolean(path))
       else
         None
-
     }
   }
 
@@ -101,13 +99,38 @@ object ThreadStarvationDetector {
   def apply(config: Config): ThreadStarvationDetector = {
     //monitoring is enabled
     if (config.getBoolean("thread-starvation-detector.enabled")) {
-      val cfg = parseConfig(config)
-      new ThreadStarvationDetectorImpl(cfg, defaultWarningConsumer)
+      new ThreadStarvationDetectorImpl(parseConfig(config), createReporters(config))
     }
     //if monitoring is disabled then we use the no-op detector
     else {
       new NoOpThreadStarvationDetector()
     }
+  }
+
+  private[tsd] def createReporters(config: Config):Seq[Reporter] = {
+    import scala.collection.convert.ImplicitConversions.`collection AsScalaIterable`
+    config.getConfig("thread-starvation-detector.reporter").root().keySet().map(name => createReporter(name, config.getConfig(s"thread-starvation-detector.reporter.$name"), config)).flatten.toSeq
+  }
+
+  private[tsd] def createReporter(name:String, config: Config, fullConfig:Config):Option[Reporter] = {
+    try {
+      val reporterConfig = ReporterConfig(name,
+        config.getString("description"),
+        config.getBoolean("enabled"),
+        fullConfig
+      )
+      if (reporterConfig.enabled) {
+        val factory = Class.forName(config.getString("factory")).getDeclaredConstructor().newInstance().asInstanceOf[ReporterFactory]
+        Option(factory.newReporter(reporterConfig))
+      } else {
+        None
+      }
+    } catch{
+      case ex =>
+        logger.error(s"Failed to create instance of reporter [$name] due to [${ex.getMessage}]")
+        None
+    }
+
   }
 
   /**
@@ -144,23 +167,15 @@ object ThreadStarvationDetector {
       customMonitorConfig = customMonitorConfig
     )
   }
-  /**
-   * The default/normal function to log messages in case of a failed test towards an execution context
-   * @param msg
-   */
-  private def defaultWarningConsumer(msg:String):Unit = logger.warn(msg)
-
 }
 
-import ThreadStarvationDetector._
 /**
  * The class for running test jobs against execution contexts
  * @param config The configuration
- * @param warningConsumer The function to where to send the messages of failed tests (only used for testing purposes, default is using a logger)
  * @author Peter Nerg
- * @since 1.0.0
+ * @since 1.0
  */
-private[tsd] class ThreadStarvationDetectorImpl(config: ThreadStarvationDetectorConfig, warningConsumer:WarningConsumer) extends ThreadStarvationDetector {
+private[tsd] class ThreadStarvationDetectorImpl(config: ThreadStarvationDetectorConfig, reporters:Seq[Reporter]) extends ThreadStarvationDetector {
   private val logger = LoggerFactory.getLogger(classOf[ThreadStarvationDetector])
   /** Flag for the state of this class. */
   @volatile private var running = true
@@ -179,7 +194,7 @@ private[tsd] class ThreadStarvationDetectorImpl(config: ThreadStarvationDetector
       case None =>
         logger.info(s"Added execution context named [$name] to be monitored")
         val monitorConfig = config.getCustomOrDefaultMonitorConfig(name)
-        val me = new MonitoredExecutionContext(name, monitorConfig, ec, Seq.empty) //TODO add proper list of reporters
+        val me = new MonitoredExecutionContext(name, monitorConfig, ec, reporters)
         queue += me
         me
     }
@@ -221,20 +236,17 @@ private[tsd] class ThreadStarvationDetectorImpl(config: ThreadStarvationDetector
     //this is the time when the payload was created
     private val startTime = System.nanoTime()
 
-    override def run(): Unit = {
-      //the difference from creation time to actual time when the payload was executed should not differ more than the defined time
-      val duration = Duration.fromNanos(System.nanoTime - startTime)
-      val shouldNotify = mo.finishTest(duration)
-      if (shouldNotify && mo.monitorConfig.loggingEnabled) {
-        warningConsumer.apply(s"Executing a test job in [${mo.name}] took [${duration.toMillis}]ms, max configured threshold is [${mo.monitorConfig.maxExecutionTimeThreshold.toMillis}]ms, total times this pool has failed checks is [${mo.failureCount}]. Possible cause is CPU and/or thread starvation")
-      }
-    }
+    /**
+     * Once this test job gets to execute we just stop the timer.
+     * It's the queue time that indicates how busy the executor is.
+     */
+    override def run(): Unit = mo.finishTest(Duration.fromNanos(System.nanoTime - startTime))
   }
 }
 
 /**
  * A no-op detector used when the feature is disabled from start/config
- * @since 3.7.0
+ * @since 1.0
  */
 private[tsd] class NoOpThreadStarvationDetector extends ThreadStarvationDetector {
   private object NoOpMonitoredThreadPool extends MonitoredThreadPool {

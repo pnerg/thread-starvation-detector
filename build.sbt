@@ -42,6 +42,17 @@ lazy val lib = (project in file("lib"))
   )
 
 // ======================================================
+// Logging reporter
+// ======================================================
+/*
+lazy val logging = (project in file("logging-reporter"))
+  .settings(baseSettings)
+  .settings(
+    name := "thread-starvation-detector-logging-reporter",
+  ).dependsOn(lib)
+*/
+
+// ======================================================
 // Kamon reporter
 // ======================================================
 /*

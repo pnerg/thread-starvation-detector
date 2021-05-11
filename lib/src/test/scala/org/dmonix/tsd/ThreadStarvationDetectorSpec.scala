@@ -15,33 +15,58 @@
  */
 package org.dmonix.tsd
 
-import com.typesafe.config.ConfigFactory
-import org.specs2.control.NamedThreadFactory
 import org.specs2.mutable.Specification
 
-import java.util.concurrent.{Executors, Semaphore, TimeUnit}
-import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 /**
  * Tests for the [[ThreadStarvationDetector]] class
  * @author Peter Nerg
  */
-class ThreadStarvationDetectorSpec extends Specification {
-  private val config = ConfigFactory.defaultReference()
-  
-  "Using ThreadStarvationDetectorSingleton shall" >> {
-    val singleton = ThreadStarvationDetectorSingleton.init(config)
-    "return the singleton instance if already initiated" >> {
-      ThreadStarvationDetectorSingleton.init(config) === singleton
+class ThreadStarvationDetectorSpec extends Specification with TestUtils {
+  "Create instance of reporter shall" >> {
+    import ThreadStarvationDetector.createReporter
+    "return the default logger reporter for the default config" >> {
+      val localConfig = config.getConfig("thread-starvation-detector.reporter.logging-reporter")
+      createReporter("logger-reporter", localConfig, config) must beSome
     }
-    "return the singleton for every get" >> {
-      ThreadStarvationDetectorSingleton.get() === singleton
+    "return the configured custom reporter" >> {
+      val localConfig = mockReporterConfig(true).getConfig("thread-starvation-detector.reporter.mock-reporter")
+      createReporter("mock-reporter", localConfig, config) must beSome
+    }
+    "return None if the custom reporter is disabled" >> {
+      val localConfig = mockReporterConfig(false).getConfig("thread-starvation-detector.reporter.mock-reporter")
+      createReporter("mock-reporter", localConfig, config) must beNone
+    }
+    "return None for the default config if the logger reporter is disabled" >> {
+      val localConfig = config("thread-starvation-detector.reporter.logging-reporter.enabled=false").getConfig("thread-starvation-detector.reporter.logging-reporter")
+      createReporter("logger-reporter", localConfig, config) must beNone
+    }
+  }
+  "Creating list of reporters shall" >> {
+    import ThreadStarvationDetector.createReporters
+    "return the default logger reporter for the default config" >> {
+      createReporters(config) must have size(1)
+    }
+    "return the default logger reporter and added custom/mock logger" >> {
+      val localConfig = mockReporterConfig(true).withFallback(config)
+      createReporters(localConfig) must have size(2)
+    }
+    "return only the default logger reporter if the custom/mock logger is disabled" >> {
+      val localConfig = mockReporterConfig(false).withFallback(config)
+      createReporters(localConfig) must have size(1)
+    }
+    "yield an empty list for the default config if the logger reporter is disabled" >> {
+      val localConfig = config("thread-starvation-detector.reporter.logging-reporter.enabled=false")
+      createReporters(localConfig) must beEmpty
+    }
+    "yield an empty list if there are no configured reporters" >> {
+      ok
     }
   }
   "Using ThreadStarvationDetector object shall" >> {
     "yield a no-op monitor if the feature is disabled" >> {
-      val localConfig = ConfigFactory.parseString("thread-starvation-detector.enabled=false").withFallback(config)
+      val localConfig = config("thread-starvation-detector.enabled=false")
       ThreadStarvationDetector(localConfig) must haveClass[NoOpThreadStarvationDetector]
     }
     "yield a proper monitor if the feature is enabled" >> {
@@ -72,7 +97,7 @@ class ThreadStarvationDetectorSpec extends Specification {
           |  }
           |}
           |""".stripMargin
-      val cfg = ThreadStarvationDetector.parseConfig(ConfigFactory.parseString(overrides).withFallback(config))
+      val cfg = ThreadStarvationDetector.parseConfig(config(overrides))
       cfg.checkInterval === 1.second //default value
       cfg.initialDelay === 1.second //custom value
       cfg.defaultMonitorConfig.maxExecutionTimeThreshold === 200.millis //custom value
@@ -85,8 +110,8 @@ class ThreadStarvationDetectorSpec extends Specification {
     val monitorConfig = MonitorConfig(50.millis, 10.seconds, true)
     val config = ThreadStarvationDetectorConfig(0.seconds, 25.millis, monitorConfig, Map.empty)
     "shall detect if a thread pool is choked" >> {
-      val consumer = new BlockingWarningConsumer()
-      val detector = new ThreadStarvationDetectorImpl(config, consumer.warningConsumer)
+      val reporter = MockReporter()
+      val detector = new ThreadStarvationDetectorImpl(config, Seq(reporter))
       val name = "test-example"
       val ec = createExecutionContext(name, 1)
       val monitor = detector.monitorExecutionContext(name, ec)
@@ -95,14 +120,13 @@ class ThreadStarvationDetectorSpec extends Specification {
       //create a job that hogs the only Thread for 100 ms
       ec.execute(new BlockingJob(100.millis))
 
-      consumer.waitForWarningEvent() === true
+      reporter.waitForReport() == true
       detector.stop()
       //all monitors should automatically be cancelled when stopping the detector
       monitor.isCancelled === true
     }
     "return the existing monitor if trying to add a second with the same name" >> {
-      val consumer = new BlockingWarningConsumer()
-      val detector = new ThreadStarvationDetectorImpl(config, consumer.warningConsumer)
+      val detector = new ThreadStarvationDetectorImpl(config, Seq(MockReporter()))
       val name = "another-test-example"
       val ec = createExecutionContext(name, 1)
       val monitor = detector.monitorExecutionContext(name, ec)
@@ -130,16 +154,10 @@ class ThreadStarvationDetectorSpec extends Specification {
     }
   }
 
-  private class BlockingWarningConsumer() {
-    private val blocker = new Semaphore(0)
-    def waitForWarningEvent():Boolean = blocker.tryAcquire(5, TimeUnit.SECONDS)
-    def warningConsumer(msg:String):Unit = blocker.release()
-  }
-
   private class BlockingJob(blockTime:FiniteDuration) extends Runnable {
     override def run(): Unit = {
       Thread.sleep(blockTime.toMillis)
     }
   }
-  private def createExecutionContext(name:String, threadCount:Int):ExecutionContext = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(threadCount, NamedThreadFactory(name)))
+
 }

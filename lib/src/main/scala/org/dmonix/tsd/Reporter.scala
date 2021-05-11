@@ -21,11 +21,36 @@ import scala.concurrent.duration.FiniteDuration
 
 case class ReporterConfig(name:String, description:String, enabled:Boolean, config:Config)
 
+/**
+ * Factory for creating [[Reporter]] instances.
+ * The implementation must have a default/no arg constructor.
+ * @since 1.0
+ */
 trait ReporterFactory {
   def newReporter(reporterConfig: ReporterConfig):Reporter
 }
 
+/**
+ * Receiver of reports from test executions.
+ * @since 1.0
+ */
 trait Reporter {
+  /**
+   * Report a successful execution of a named execution context.
+   * @param name The name of the execution context
+   * @param duration The duration for the test
+   */
   def reportSuccessful(name:String, duration:FiniteDuration)
+
+  /**
+   * Report a failed execution of a named execution context.
+   * @param name The name of the execution context
+   * @param duration The duration for the test
+   */
   def reportFailed(name:String, duration:FiniteDuration)
+
+  /**
+   * Invoked when the ''ThreadStarvationDetector.stop'' is invoked
+   */
+  def stop():Unit
 }
