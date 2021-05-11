@@ -51,4 +51,12 @@ trait TestUtils {
    */
   def createExecutionContext(name:String, threadCount:Int):ExecutionContext = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(threadCount, NamedThreadFactory(name)))
 
+  /**
+   * Creates a 'fake' execution context that uses the invoking thread to run the job/task
+   * @return
+   */
+  def sameThreadExecutionContext(): ExecutionContext = new ExecutionContext {
+    override def execute(runnable: Runnable): Unit = runnable.run()
+    override def reportFailure(cause: Throwable): Unit = {}
+  }
 }
