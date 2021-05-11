@@ -90,20 +90,24 @@ class ThreadStarvationDetectorSpec extends Specification with TestUtils {
     }
   }
 
-  "Using NoOpThreadStarvationDetector shall" >> {
-    "do nothing when monitoring an execution context" >> {
-      val detector = new NoOpThreadStarvationDetector()
-      val name = "some-name"
-      val ec = createExecutionContext(name, 1)
-      val monitor = detector.monitorExecutionContext(name, ec)
-
-      //should be cancelled from start
+  "When using NoOpThreadStarvationDetector to monitor an execution context then" >> {
+    val detector = new NoOpThreadStarvationDetector()
+    val monitor = detector.monitorExecutionContext("test", sameThreadExecutionContext())
+    "it shall be cancelled from start" >> {
       monitor.isCancelled === true
-      monitor.failureCount === 0
-
-      //does nothing
+    }
+    "invoking stop shall do nothing" >> {
       detector.stop()
       ok
+    }
+    "test count is always zero" >> {
+      monitor.testCount === 0
+    }
+    "failure count is always zero" >> {
+      monitor.failureCount === 0
+    }
+    "consecutive failure count is always zero" >> {
+      monitor.consecutiveFailureCount === 0
     }
   }
 
