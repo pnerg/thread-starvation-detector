@@ -42,20 +42,8 @@ lazy val lib = (project in file("lib"))
   )
 
 // ======================================================
-// Logging reporter
-// ======================================================
-/*
-lazy val logging = (project in file("logging-reporter"))
-  .settings(baseSettings)
-  .settings(
-    name := "thread-starvation-detector-logging-reporter",
-  ).dependsOn(lib)
-*/
-
-// ======================================================
 // Kamon reporter
 // ======================================================
-/*
 lazy val kamon = (project in file("kamon-reporter"))
   .settings(baseSettings)
   .settings(
@@ -63,6 +51,4 @@ lazy val kamon = (project in file("kamon-reporter"))
     libraryDependencies ++= Seq(
       `kamon-core` % "provided"
     )
-
   ).dependsOn(lib)
-*/
