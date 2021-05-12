@@ -36,5 +36,4 @@ class MockReporter extends Reporter {
     report = Some((result, r))
     semaphore.release()
   }
-  override def stop(): Unit = {}
 }

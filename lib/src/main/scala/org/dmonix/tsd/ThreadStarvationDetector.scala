@@ -85,47 +85,13 @@ object ThreadStarvationDetector {
   def apply(config: Config): ThreadStarvationDetector = {
     //monitoring is enabled
     if (config.getBoolean("thread-starvation-detector.enabled")) {
-      new ThreadStarvationDetectorImpl(parseConfig(config), createReporters(config))
+      new ThreadStarvationDetectorImpl(parseConfig(config), ReporterBuilder.createReporters(config))
     }
     //if monitoring is disabled then we use the no-op detector
     else {
       new NoOpThreadStarvationDetector()
     }
   }
-
-  private[tsd] def createReporters(config: Config):Seq[Reporter] = {
-    import scala.collection.JavaConverters._
-
-    config.getConfig("thread-starvation-detector.reporter")
-      .root()
-      .keySet()
-      .asScala
-      .map(name => createReporter(name, config))
-      .flatten.toSeq
-  }
-
-  private[tsd] def createReporter(name:String, config:Config):Option[Reporter] = {
-    val localCfg = config.getConfig(s"thread-starvation-detector.reporter.$name")
-    try {
-      val reporterConfig = ReporterConfig(name,
-        localCfg.getString("description"),
-        localCfg.getBoolean("enabled"),
-        config
-      )
-      if (reporterConfig.enabled) {
-        val factory = Class.forName(localCfg.getString("factory")).getDeclaredConstructor().newInstance().asInstanceOf[ReporterFactory]
-        Option(factory.newReporter(reporterConfig))
-      } else {
-        None
-      }
-    } catch{
-      case ex =>
-        logger.error(s"Failed to create instance of reporter [$name] due to [${ex.getMessage}]")
-        None
-    }
-
-  }
-
 
 }
 

@@ -24,31 +24,6 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
  * @author Peter Nerg
  */
 class ThreadStarvationDetectorSpec extends Specification with TestUtils {
-  "Create instance of reporter shall" >> {
-    import ThreadStarvationDetector.createReporter
-    "return the configured custom reporter" >> {
-      val localConfig = mockReporterConfig(true).withFallback(config)
-      createReporter("mock-reporter", localConfig) must beSome
-    }
-    "return None if the custom reporter is disabled" >> {
-      val localConfig = mockReporterConfig(false).withFallback(config)
-      createReporter("mock-reporter", localConfig) must beNone
-    }
-  }
-  "Creating list of reporters shall" >> {
-    import ThreadStarvationDetector.createReporters
-    "yield a empty list if there are no configured reporters" >> {
-      createReporters(config) must beEmpty
-    }
-    "return the added custom/mock logger" >> {
-      val localConfig = mockReporterConfig(true).withFallback(config)
-      createReporters(localConfig) must have size(1)
-    }
-    "return a empty list if the custom/mock logger is disabled" >> {
-      val localConfig = mockReporterConfig(false).withFallback(config)
-      createReporters(localConfig) must beEmpty
-    }
-  }
   "Using ThreadStarvationDetector object shall" >> {
     "yield a no-op monitor if the feature is disabled" >> {
       val localConfig = config("thread-starvation-detector.enabled=false")
@@ -79,7 +54,7 @@ class ThreadStarvationDetectorSpec extends Specification with TestUtils {
       monitor.isCancelled === true
     }
     "return the existing monitor if trying to add a second with the same name" >> {
-      val detector = new ThreadStarvationDetectorImpl(config, Seq(MockReporter()))
+      val detector = new ThreadStarvationDetectorImpl(config.copy(initialDelay = 1.minute), Seq(MockReporter()))
       val name = "another-test-example"
       val ec = createExecutionContext(name, 1)
       val monitor = detector.monitorExecutionContext(name, ec)

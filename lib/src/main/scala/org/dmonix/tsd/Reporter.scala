@@ -16,6 +16,8 @@
 package org.dmonix.tsd
 
 import com.typesafe.config.Config
+import org.dmonix.tsd.ThreadStarvationDetector.logger
+import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -27,6 +29,43 @@ case class ReporterConfig(name:String, description:String, enabled:Boolean, conf
  * @param duration The duration for the test
  */
 case class Report(name:String, duration:FiniteDuration, totalTestCount:Int, totalFailureCount:Int, successiveFailureCount:Int)
+
+object ReporterBuilder {
+  private val logger = LoggerFactory.getLogger(ReporterBuilder.getClass)
+  private[tsd] def createReporters(config: Config):Seq[Reporter] = {
+    import scala.collection.JavaConverters._
+
+    config.getConfig("thread-starvation-detector.reporter")
+      .root()
+      .keySet()
+      .asScala
+      .map(name => createReporter(name, config))
+      .flatten.toSeq
+  }
+
+  private[tsd] def createReporter(name:String, config:Config):Option[Reporter] = {
+    val localCfg = config.getConfig(s"thread-starvation-detector.reporter.$name")
+    try {
+      val reporterConfig = ReporterConfig(name,
+        localCfg.getString("description"),
+        localCfg.getBoolean("enabled"),
+        config
+      )
+      if (reporterConfig.enabled) {
+        logger.info(s"Starting [$name] reporter")
+        val factory = Class.forName(localCfg.getString("factory")).getDeclaredConstructor().newInstance().asInstanceOf[ReporterFactory]
+        Option(factory.newReporter(reporterConfig))
+      } else {
+        logger.debug(s"Reporter [$name] is disabled, ignoring it")
+        None
+      }
+    } catch{
+      case ex:Throwable =>
+        logger.error(s"Failed to create instance of reporter [$name] due to [${ex.getMessage}]")
+        None
+    }
+  }
+}
 
 /**
  * Factory for creating [[Reporter]] instances.
@@ -56,6 +95,7 @@ trait Reporter {
 
   /**
    * Invoked when the ''ThreadStarvationDetector.stop'' is invoked
+   * Optional method, default implementation does nothing.
    */
-  def stop():Unit
+  def stop():Unit = {}
 }
